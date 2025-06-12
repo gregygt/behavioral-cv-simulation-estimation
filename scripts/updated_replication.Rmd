@@ -1,0 +1,100 @@
+---
+title: "Updated CV -- Replication"
+author: "Gregy Gustavo Tuerah"
+date: "2025-05-30"
+output: Rmd
+---
+```{r}
+# Setup
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tibble)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(numDeriv)
+library(knitr)
+```
+
+```{r}
+# Core function: simulate basic CV moments
+simulate_cv_moments <- function(mu_v, sigma_v, N_per_cell = 100000) {
+  cv_treatments <- expand.grid(tau = c(20, 50), p = c(0.001, 0.02))
+  cv_results <- numeric(nrow(cv_treatments))
+  for (i in seq_len(nrow(cv_treatments))) {
+    treat <- cv_treatments[i, ]
+    p <- treat$p
+    tau <- treat$tau
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    score <- p * (v - tau)
+    Y <- as.integer(score > 0)
+    cv_results[i] <- mean(Y)
+  }
+  return(cv_results)
+}
+
+# GMM objective for basic model
+simulate_cv_moments_pflex <- function(mu_v, sigma_v, p_l, p_h, N_per_cell = 100000) {
+  cv_treatments <- expand.grid(tau = c(20, 50), p_label = c("pl", "ph"))
+  cv_results <- numeric(nrow(cv_treatments))
+  for (i in seq_len(nrow(cv_treatments))) {
+    treat <- cv_treatments[i, ]
+    p <- if (treat$p_label == "pl") p_l else p_h
+    tau <- treat$tau
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    score <- p * (v - tau)
+    Y <- as.integer(score > 0)
+    cv_results[i] <- mean(Y)
+  }
+  return(cv_results)
+}
+
+gmm_objective <- function(theta) {
+  mu_v <- theta[1]
+  sigma_v <- theta[2]
+  p_l <- theta[3]
+  p_h <- theta[4]
+  simulated <- simulate_cv_moments_pflex(mu_v, sigma_v, p_l, p_h)
+  empirical <- simulate_cv_moments(mu_v = 40, sigma_v = 50)
+  return(sum((simulated - empirical)^2))
+}
+
+# Full model simulation including social signaling and incentives
+simulate_full_moments <- function(mu_v, sigma_v, p_l, p_h, mu_s, sigma_s, incentive_strength = 0.5, N_per_cell = 100000) {
+  full_treatments <- expand.grid(tau = c(20, 50), p_label = c("pl", "ph"), I_label = c("yes", "none", "no"))
+  full_results <- numeric(nrow(full_treatments))
+  for (i in seq_len(nrow(full_treatments))) {
+    treat <- full_treatments[i, ]
+    p <- if (treat$p_label == "pl") p_l else p_h
+    tau <- treat$tau
+    I_sign <- switch(treat$I_label, "yes" = 1, "none" = 0, "no" = -1)
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    s <- rnorm(N_per_cell, mean = mu_s, sd = sigma_s)
+    I <- incentive_strength * I_sign
+    score <- p * (v - tau) + s + I
+    Y <- as.integer(score > 0)
+    full_results[i] <- mean(Y)
+  }
+  return(full_results)
+}
+
+# GMM objective for full model
+gmm_objective_full <- function(theta) {
+  mu_v <- theta[1]; sigma_v <- theta[2]; p_l <- theta[3]; p_h <- theta[4]
+  mu_s <- theta[5]; sigma_s <- theta[6]
+  empirical <- simulate_full_moments(40, 50, 0.001, 0.02, 1, 2)
+  simulated <- simulate_full_moments(mu_v, sigma_v, p_l, p_h, mu_s, sigma_s)
+  return(sum((simulated - empirical)^2))
+}
+
+# Example estimation
+result_full <- optim(
+  par = c(30, 70, 0.005, 0.01, 0.5, 3),
+  fn = gmm_objective_full,
+  method = "L-BFGS-B",
+  control = list(maxit = 100000)
+)
+```
+
+print(result_full$par)
+print(result_full$value)
