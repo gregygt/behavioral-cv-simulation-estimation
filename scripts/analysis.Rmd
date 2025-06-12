@@ -1,1 +1,1027 @@
+---
+title: "Behavioral CV Simulation"
+author: "Gregy Gustavo Tuerah"
+date: "2025-04-24"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tibble)
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(numDeriv)
+library(knitr)
+```
+```{r}
+# Action 1: Simulate four moments at benchmark parameter values for p and v, but with s = 0
+
+cv_treatments <- expand.grid(tau = c(20, 50),
+                              p = c(0.001, 0.02)) # note --> imagine its 2 x 2 now
+
+simulate_cv_moments <- function(mu_v, sigma_v, N_per_cell = 100000) { # this function is the main function I got from the help of ChatGPT4o
+  cv_results <- numeric(nrow(cv_treatments))
+  
+  for (i in seq_len(nrow(cv_treatments))) { # making sure the function is for every component
+    treat <- cv_treatments[i, ]
+    
+    p <- treat$p
+    tau <- treat$tau
+    
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    
+    # s = 0, I = 0 --> remember from the question we have this assumption
+    score <- p * (v - tau) # the model
+    Y <- as.integer(score > 0) # the outcome probability voting yes
+    
+    cv_results[i] <- mean(Y)
+  }
+  return(cv_results)
+}
+
+# Simulated results
+simulated <- simulate_cv_moments(mu_v = 40, sigma_v = 50)
+
+# Analytical results
+analytical <- 1 - pnorm(cv_treatments$tau, mean = 40, sd = 50) # finding it manually
+
+# Put the information into the table
+results_table <- data.frame(
+  Treatment = c("{pl, Tl}", "{pl, Th}", "{ph, Tl}", "{ph, Th}"), # Treatment parameters used
+  p = cv_treatments$p,
+  tau = cv_treatments$tau,
+  Simulated = round(simulated, 5),
+  Analytical = round(analytical, 5)
+)
+
+kable(results_table, caption = "Simulated and Analytical Moments for CV Action 1")
+```
+```{r, warning=FALSE}
+
+benchmark_theta <- list( # benchmark values are given
+  mu_v = 40,
+  sigma_v = 50,
+  mu_s = 0,
+  sigma_s = 2
+) # This code will be used many times
+
+# I will use the same function I made before
+
+simulate_cv_moments <- function(mu_v, sigma_v, N_per_cell = 100000) {
+  cv_treatments <- expand.grid(tau = c(20, 50), p = c(0.001, 0.02)) # include the cv_treatments to the function directly
+  cv_results <- numeric(nrow(cv_treatments)) # make sure we have storage for the results
+  
+  for (i in seq_len(nrow(cv_treatments))) { # doing this across each treatment
+    treat <- cv_treatments[i, ]
+    p <- treat$p
+    tau <- treat$tau
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v) # draw v
+    score <- p * (v - tau)
+    Y <- as.integer(score > 0)
+    cv_results[i] <- mean(Y) # put the result in the storage
+  }
+  return(cv_results)
+}
+
+compare_parameter <- function(param_name, grid_values, benchmark_theta, N_per_cell = 100000) { # this is the second function I got help with
+  # I claim that this function will vary one parameter at a time and the others at their benchmark
+  map_dfr(grid_values, function(val) { # bind into one data frame
+    theta <- benchmark_theta
+    theta[[param_name]] <- val
+    
+    # below is the simulations based on the theta we have
+    sims <- simulate_cv_moments(mu_v = theta$mu_v, sigma_v = theta$sigma_v, N_per_cell)
+    
+    tibble( # making the parameter into a table
+      parameter = param_name,
+      param_value = val,  
+      `{pl, Tl}` = sims[1],
+      `{pl, Th}` = sims[2],
+      `{ph, Tl}` = sims[3],
+      `{ph, Th}` = sims[4]
+    )
+  })
+}
+
+# Define grids for each parameter
+param_grids <- list(
+  mu_v = seq(20, 60, by = 2),
+  sigma_v = seq(20, 100, by = 5)
+)
+
+# Run comparisons and combine into one tidy data frame
+all_results <- bind_rows(
+  compare_parameter("mu_v", param_grids$mu_v, benchmark_theta),
+  compare_parameter("sigma_v", param_grids$sigma_v, benchmark_theta)
+)
+
+plot_comparative_statics <- function(results_df) { # ploting functions to show the comparative statics
+  results_long <- results_df %>%
+    pivot_longer(cols = starts_with("{"), names_to = "moment", values_to = "moment_value") # we change the matrix into long
+  
+  ggplot(results_long, aes(x = param_value, y = moment_value, color = moment)) +
+    geom_line(size = 1.2) + # plot the moment as a line
+    facet_wrap(~parameter, scales = "free_x") +
+    labs(title = "Comparative Statics: Effect of Each Parameter on Moments",
+         x = "Parameter Value",
+         y = "Simulated Moment Value") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+plot_comparative_statics(all_results)
+
+```
+```{r}
+# Repeat the same code above
+simulate_cv_moments_pflex <- function(mu_v, sigma_v, p_l, p_h, N_per_cell = 100000) {
+  cv_treatments <- expand.grid(tau = c(20, 50), p_label = c("pl", "ph"))
+  cv_results <- numeric(nrow(cv_treatments))
+  
+  for (i in seq_len(nrow(cv_treatments))) {
+    treat <- cv_treatments[i, ]
+    
+    p <- if (treat$p_label == "pl") p_l else p_h
+    tau <- treat$tau
+    
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    score <- p * (v - tau)
+    Y <- as.integer(score > 0)
+    
+    cv_results[i] <- mean(Y)
+  }
+  return(cv_results)
+}
+
+compare_pl_or_ph <- function(param_name, grid_values, benchmark_theta, N_per_cell = 100000) {
+  map_dfr(grid_values, function(val) {
+    theta <- benchmark_theta
+    theta[[param_name]] <- val
+    
+    sims <- simulate_cv_moments_pflex(
+      mu_v = theta$mu_v,
+      sigma_v = theta$sigma_v,
+      p_l = theta$p_l,
+      p_h = theta$p_h,
+      N_per_cell = N_per_cell
+    )
+    
+    tibble(
+      parameter = param_name,
+      param_value = val,
+      `{pl, Tl}` = sims[1],
+      `{pl, Th}` = sims[2],
+      `{ph, Tl}` = sims[3],
+      `{ph, Th}` = sims[4]
+    )
+  })
+}
+
+benchmark_theta <- list(
+  mu_v = 40,
+  sigma_v = 50,
+  p_l = 0.001,
+  p_h = 0.02
+)
+
+results_pl <- compare_pl_or_ph("p_l", seq(0.0005, 0.005, by = 0.0005), benchmark_theta)
+results_ph <- compare_pl_or_ph("p_h", seq(0.01, 0.05, by = 0.005), benchmark_theta)
+
+all_results <- bind_rows(results_pl, results_ph)
+
+plot_comparative_statics <- function(results_df) {
+  results_long <- results_df %>%
+    pivot_longer(cols = starts_with("{"), names_to = "moment", values_to = "moment_value")
+  
+  ggplot(results_long, aes(x = param_value, y = moment_value, color = moment)) +
+    geom_line(size = 1.2) +
+    facet_wrap(~parameter, scales = "free_x") +
+    labs(title = "Comparative Statics: Effect of Each Parameter on Moments",
+         x = "Parameter Value",
+         y = "Simulated Moment Value") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+plot_comparative_statics(all_results)
+```
+```{r}
+empirical_moments <- simulate_cv_moments(mu_v = 40, sigma_v = 50)
+
+# The code below will also be used again
+
+gmm_objective <- function(theta) { # define the GMM based on the lecture notes 
+  mu_v <- theta[1]
+  sigma_v <- theta[2]
+  p_l <- theta[3]
+  p_h <- theta[4]
+  
+  
+  simulated <- simulate_cv_moments_pflex(mu_v, sigma_v, p_l, p_h)
+  
+  loss <- sum((simulated - empirical_moments)^2)
+  return(loss)
+}
+
+# I will then choosing the starting values -- as recommended
+# Starting values (somewhat off from truth to test identification)
+theta_start <- c(mu_v = 30, sigma_v = 70, p_l = 0.005, p_h = 0.01)
+
+result <- optim(
+  par = theta_start,
+  fn = gmm_objective,
+  method = "L-BFGS-B",
+  control = list(maxit = 100000)
+)
+
+print(result$par)       # Estimated parameters
+print(result$value)     # Objective function value (how close we got)
+
+# - > Plot this to see it better
+
+estimated_theta <- result$par
+
+simulated_estimated <- simulate_cv_moments_pflex(
+  mu_v = estimated_theta["mu_v"],
+  sigma_v = estimated_theta["sigma_v"],
+  p_l = estimated_theta["p_l"],
+  p_h = estimated_theta["p_h"]
+)
+
+moment_names <- c("{pl, Tl}", "{pl, Th}", "{ph, Tl}", "{ph, Th}")
+
+df_plot <- tibble(
+  Treatment = moment_names,
+  Empirical = empirical_moments,
+  Estimated = simulated_estimated
+) %>%
+  pivot_longer(cols = c(Empirical, Estimated), names_to = "Source", values_to = "Moment")
+
+ggplot(df_plot, aes(x = Treatment, y = Moment, fill = Source)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Empirical vs. Estimated Moments",
+       y = "Moment Value", x = "Treatment Cell") +
+  theme_minimal()
+
+```
+```{r}
+# First I will try to simulate the and measure the comparative statics
+
+# Comparing parameter v
+
+simulate_cv_moments_with_s <- function(mu_v, sigma_v, p_l, p_h, mu_s, sigma_s, N_per_cell = 100000) {
+  cv_treatments <- expand.grid(tau = c(20, 50), p_label = c("pl", "ph"))
+  cv_results <- numeric(nrow(cv_treatments))
+  
+  for (i in seq_len(nrow(cv_treatments))) {
+    treat <- cv_treatments[i, ]
+    
+    p <- if (treat$p_label == "pl") p_l else p_h
+    tau <- treat$tau
+    
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    s <- rnorm(N_per_cell, mean = mu_s, sd = sigma_s)
+    
+    score <- p * (v - tau) + s
+    Y <- as.integer(score > 0)
+    
+    cv_results[i] <- mean(Y)
+  }
+  return(cv_results)
+}
+
+empirical_moments <- simulate_cv_moments_with_s(
+  mu_v = 40,
+  sigma_v = 50,
+  p_l = 0.001,
+  p_h = 0.02,
+  mu_s = 1,
+  sigma_s = 2
+)
+
+benchmark_theta <- list(
+  mu_v = 40,
+  sigma_v = 50,
+  p_l = 0.001,
+  p_h = 0.02,
+  mu_s = 1,
+  sigma_s = 2
+)
+
+compare_parameter_v <- function(param_name, grid_values, benchmark_theta, N_per_cell = 100000) {
+  map_dfr(grid_values, function(val) {
+    theta <- benchmark_theta
+    theta[[param_name]] <- val
+    
+    sims <- simulate_cv_moments_with_s(
+      mu_v = theta$mu_v,
+      sigma_v = theta$sigma_v,
+      p_l = theta$p_l,
+      p_h = theta$p_h,
+      mu_s = theta$mu_s,
+      sigma_s = theta$sigma_s,
+      N_per_cell = N_per_cell
+    )
+    
+    tibble(
+      parameter = param_name,
+      param_value = val,
+      `{pl, Tl}` = sims[1],
+      `{pl, Th}` = sims[2],
+      `{ph, Tl}` = sims[3],
+      `{ph, Th}` = sims[4]
+    )
+  })
+}
+
+# Grid for v
+param_grids_v <- list(
+  mu_v = seq(20, 60, by = 2),
+  sigma_v = seq(20, 100, by = 5)
+)
+
+# Run
+all_results_v <- bind_rows(
+  compare_parameter_v("mu_v", param_grids_v$mu_v, benchmark_theta),
+  compare_parameter_v("sigma_v", param_grids_v$sigma_v, benchmark_theta)
+)
+
+plot_comparative_results <- function(results_df) {
+  results_long <- results_df %>%
+    pivot_longer(cols = starts_with("{"), names_to = "moment", values_to = "moment_value")
+  
+  ggplot(results_long, aes(x = param_value, y = moment_value, color = moment)) +
+    geom_line(size = 1.2) +
+    facet_wrap(~parameter, scales = "free_x") +
+    labs(title = "Comparative Statics: Effect of Each Parameter on Moments",
+         x = "Parameter Value",
+         y = "Simulated Moment Value") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+# Then plot each
+plot_comparative_results(all_results_v)
+
+# - # - # - # - #
+
+# Compare parameter p
+compare_parameter_p <- function(param_name, grid_values, benchmark_theta, N_per_cell = 100000) {
+  map_dfr(grid_values, function(val) {
+    theta <- benchmark_theta
+    theta[[param_name]] <- val
+    
+    sims <- simulate_cv_moments_with_s(
+      mu_v = theta$mu_v,
+      sigma_v = theta$sigma_v,
+      p_l = theta$p_l,
+      p_h = theta$p_h,
+      mu_s = theta$mu_s,
+      sigma_s = theta$sigma_s,
+      N_per_cell = N_per_cell
+    )
+    
+    tibble(
+      parameter = param_name,
+      param_value = val,
+      `{pl, Tl}` = sims[1],
+      `{pl, Th}` = sims[2],
+      `{ph, Tl}` = sims[3],
+      `{ph, Th}` = sims[4]
+    )
+  })
+}
+
+# Grid for p
+param_grids_p <- list(
+  p_l = seq(0.0005, 0.005, by = 0.0005),
+  p_h = seq(0.01, 0.05, by = 0.005)
+)
+
+# Run
+all_results_p <- bind_rows(
+  compare_parameter_p("p_l", param_grids_p$p_l, benchmark_theta),
+  compare_parameter_p("p_h", param_grids_p$p_h, benchmark_theta)
+)
+
+plot_comparative_results(all_results_p)
+
+# - # - # - # - #
+# Compare parameter s
+compare_parameter_s <- function(param_name, grid_values, benchmark_theta, N_per_cell = 100000) {
+  map_dfr(grid_values, function(val) {
+    theta <- benchmark_theta
+    theta[[param_name]] <- val
+    
+    sims <- simulate_cv_moments_with_s(
+      mu_v = theta$mu_v,
+      sigma_v = theta$sigma_v,
+      p_l = theta$p_l,
+      p_h = theta$p_h,
+      mu_s = theta$mu_s,
+      sigma_s = theta$sigma_s,
+      N_per_cell = N_per_cell
+    )
+    
+    tibble(
+      parameter = param_name,
+      param_value = val,
+      `{pl, Tl}` = sims[1],
+      `{pl, Th}` = sims[2],
+      `{ph, Tl}` = sims[3],
+      `{ph, Th}` = sims[4]
+    )
+  })
+}
+
+# Grid for s
+param_grids_s <- list(
+  mu_s = seq(-1, 3, by = 0.5),
+  sigma_s = seq(1, 5, by = 0.5)
+)
+
+# Run
+all_results_s <- bind_rows(
+  compare_parameter_s("mu_s", param_grids_s$mu_s, benchmark_theta),
+  compare_parameter_s("sigma_s", param_grids_s$sigma_s, benchmark_theta)
+)
+
+plot_comparative_statics <- function(results_df) {
+  results_long <- results_df %>%
+    pivot_longer(cols = starts_with("{"), names_to = "moment", values_to = "moment_value")
+  
+  ggplot(results_long, aes(x = param_value, y = moment_value, color = moment)) +
+    geom_line(size = 1.2) +
+    facet_wrap(~parameter, scales = "free_x") +
+    labs(title = "Comparative Statics: Effect of Each Parameter on Moments",
+         x = "Parameter Value",
+         y = "Simulated Moment Value") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+plot_comparative_statics <- function(results_df) {
+  results_long <- results_df %>%
+    pivot_longer(cols = starts_with("{"), names_to = "moment", values_to = "moment_value")
+  
+  ggplot(results_long, aes(x = param_value, y = moment_value, color = moment)) +
+    geom_line(size = 1.2) +
+    facet_wrap(~parameter, scales = "free_x") +
+    labs(title = "Comparative Statics: Effect of Each Parameter on Moments",
+         x = "Parameter Value",
+         y = "Simulated Moment Value") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+plot_comparative_results(all_results_s)
+```
+
+Now let's try to estimate the parameters, although I know, we cannot get the exact value due to the mismatch of moments and parameters interest.
+```{r}
+
+gmm_objective_6param <- function(theta) {
+  mu_v <- theta[1]
+  sigma_v <- theta[2]
+  p_l <- theta[3]
+  p_h <- theta[4]
+  mu_s <- theta[5]
+  sigma_s <- theta[6]
+  
+  simulated <- simulate_cv_moments_with_s(
+    mu_v = mu_v,
+    sigma_v = sigma_v,
+    p_l = p_l,
+    p_h = p_h,
+    mu_s = mu_s,
+    sigma_s = sigma_s
+  )
+  
+  loss <- sum((simulated - empirical_moments)^2)
+  return(loss)
+}
+
+theta_start <- c(mu_v = 30, sigma_v = 70, p_l = 0.005, p_h = 0.01, mu_s = 0.5, sigma_s = 3)
+
+result_6param <- optim(
+  par = theta_start,
+  fn = gmm_objective_6param,
+  method = "L-BFGS-B",
+  control = list(maxit = 100000)
+)
+
+# Checking the optimization convergence:
+result_6param$convergence # if its 0, then I did it
+
+# Print results
+print(result_6param$par)     # Estimated parameters
+print(result_6param$value)   # Objective function value
+```
+
+```{r}
+gmm_objective_2param <- function(theta) {
+  mu_v <- theta[1]
+  sigma_v <- theta[2]
+  
+  # Fixed known parameters
+  p_l <- 0.001
+  p_h <- 0.02
+  mu_s <- 1
+  sigma_s <- 2
+  
+  simulated <- simulate_cv_moments_with_s(
+    mu_v = mu_v,
+    sigma_v = sigma_v,
+    p_l = p_l,
+    p_h = p_h,
+    mu_s = mu_s,
+    sigma_s = sigma_s
+  )
+  
+  loss <- sum((simulated - empirical_moments)^2)
+  return(loss)
+}
+
+theta_start_2param <- c(mu_v = 30, sigma_v = 70)
+
+result_2param <- optim(
+  par = theta_start_2param,
+  fn = gmm_objective_2param,
+  method = "L-BFGS-B",
+  control = list(maxit = 100000)
+)
+
+# Checking convergence
+print(result_2param$convergence) # Should be 0
+# Print estimated parameters
+print(result_2param$par)
+# Print objective value
+print(result_2param$value)
+
+# Plot
+# Get estimated parameters
+estimated_theta_2param <- result_2param$par
+
+# Simulate using estimated parameters
+simulated_estimated_2param <- simulate_cv_moments_with_s(
+  mu_v = estimated_theta_2param["mu_v"],
+  sigma_v = estimated_theta_2param["sigma_v"],
+  p_l = 0.001,
+  p_h = 0.02,
+  mu_s = 1,
+  sigma_s = 2
+)
+
+# Prepare data for plotting
+df_plot_2param <- tibble(
+  Treatment = moment_names,
+  Empirical = empirical_moments,
+  Estimated = simulated_estimated_2param
+) %>%
+  pivot_longer(cols = c(Empirical, Estimated), names_to = "Source", values_to = "Moment")
+
+# Plot
+ggplot(df_plot_2param, aes(x = Treatment, y = Moment, fill = Source)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Empirical vs. Estimated Moments (Fixing $p$ and $s$)",
+       y = "Moment Value", x = "Treatment Cell") +
+  theme_minimal()
+```
+```{r, warning=FALSE}
+# For the full model that includes all treatment arms
+
+full_treatments <- expand.grid(
+  tau = c(20, 50),            # low, high tax
+  p_label = c("pl", "ph"),     # low, high consequentiality
+  I_label = c("yes", "none", "no") # incentive to say yes, none, or no
+)
+
+# Simulation function that includes incentives I
+simulate_full_moments <- function(mu_v, sigma_v, p_l, p_h, mu_s, sigma_s, incentive_strength = 0.5, N_per_cell = 100000) {
+  full_results <- numeric(nrow(full_treatments))
+  
+  for (i in seq_len(nrow(full_treatments))) {
+    treat <- full_treatments[i, ]
+    
+    # Set treatment-specific parameters
+    p <- if (treat$p_label == "pl") p_l else p_h
+    tau <- treat$tau
+    I_sign <- switch(treat$I_label,
+                     "yes" = 1,
+                     "none" = 0,
+                     "no" = -1)
+    
+    # Draw random variables
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    s <- rnorm(N_per_cell, mean = mu_s, sd = sigma_s)
+    
+    # Now incentive random draw
+    I <- incentive_strength * I_sign
+    
+    # Compute score and decision
+    score <- p * (v - tau) + s + I
+    Y <- as.integer(score > 0)
+    
+    # Save the share voting "Yes"
+    full_results[i] <- mean(Y)
+  }
+  return(full_results)
+}
+
+# Simulate with the benchmark parameter again
+
+benchmark_theta_full <- list(
+  mu_v = 40,
+  sigma_v = 50,
+  p_l = 0.001,
+  p_h = 0.02,
+  mu_s = 1,
+  sigma_s = 2
+)
+
+empirical_moments_full <- simulate_full_moments(
+  mu_v = benchmark_theta_full$mu_v,
+  sigma_v = benchmark_theta_full$sigma_v,
+  p_l = benchmark_theta_full$p_l,
+  p_h = benchmark_theta_full$p_h,
+  mu_s = benchmark_theta_full$mu_s,
+  sigma_s = benchmark_theta_full$sigma_s
+)
+
+table_moments <- full_treatments %>%
+  mutate(
+    Moment = empirical_moments_full,
+    Treatment_Label = paste0(
+      "p:", p_label, ", tau:", tau, ", I:", I_label
+    )
+  ) %>%
+  select(Treatment_Label, Moment)
+
+kable(table_moments, caption = "Mapping of Treatment Cells to Empirical Moments")
+```
+```{r, warning=FALSE}
+# First is the comparative statics
+
+compare_parameter_full <- function(param_name, grid_values, benchmark_theta, incentive_strength = 0.5, N_per_cell = 100000) {
+  map_dfr(grid_values, function(val) {
+    theta <- benchmark_theta
+    theta[[param_name]] <- val
+    
+    sims <- simulate_full_moments(
+      mu_v = theta$mu_v,
+      sigma_v = theta$sigma_v,
+      p_l = theta$p_l,
+      p_h = theta$p_h,
+      mu_s = theta$mu_s,
+      sigma_s = theta$sigma_s,
+      incentive_strength = incentive_strength,
+      N_per_cell = N_per_cell
+    )
+    
+    sims_df <- tibble(Treatment = 1:12, Moment = sims)
+    
+    sims_df %>%
+      mutate(
+        parameter = param_name,
+        param_value = val
+      )
+  })
+}
+
+param_grids_full <- list(
+  p_l = seq(0.0005, 0.005, by = 0.0005),
+  p_h = seq(0.01, 0.05, by = 0.005),
+  mu_v = seq(20, 60, by = 5),
+  sigma_v = seq(20, 100, by = 10),
+  mu_s = seq(0, 2, by = 0.5),
+  sigma_s = seq(1, 5, by = 0.5)
+)
+
+# Example for varying mu_v
+results_mu_v <- compare_parameter_full("mu_v", param_grids_full$mu_v, benchmark_theta_full)
+
+# Example for varying sigma_v
+results_sigma_v <- compare_parameter_full("sigma_v", param_grids_full$sigma_v, benchmark_theta_full)
+
+# Example for varying p_l
+results_p_l <- compare_parameter_full("p_l", param_grids_full$p_l, benchmark_theta_full)
+
+# Example for varying p_h
+results_p_h <- compare_parameter_full("p_h", param_grids_full$p_h, benchmark_theta_full)
+
+# Example for varying mu_s
+results_mu_s <- compare_parameter_full("mu_s", param_grids_full$mu_s, benchmark_theta_full)
+
+# Example for varying sigma_s
+results_sigma_s <- compare_parameter_full("sigma_s", param_grids_full$sigma_s, benchmark_theta_full)
+
+# Plot
+plot_comparative_statics_full <- function(results_df) {
+  results_df %>%
+    ggplot(aes(x = param_value, y = Moment, color = as.factor(Treatment))) +
+    geom_line(size = 1.2) +
+    facet_wrap(~parameter, scales = "free_x") +
+    labs(title = "Comparative Statics: Effect of Each Parameter on 12 Moments",
+         x = "Parameter Value",
+         y = "Moment Value",
+         color = "Treatment") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+}
+
+plot_comparative_statics_full(results_mu_v)
+plot_comparative_statics_full(results_sigma_v)
+plot_comparative_statics_full(results_p_l)
+plot_comparative_statics_full(results_p_h)
+plot_comparative_statics_full(results_mu_s)
+plot_comparative_statics_full(results_sigma_s)
+
+
+```
+
+```{r, warning=FALSE}
+# Next is the estimation and optimization
+gmm_objective_full <- function(theta) {
+  mu_v <- theta[1]
+  sigma_v <- theta[2]
+  p_l <- theta[3]
+  p_h <- theta[4]
+  mu_s <- theta[5]
+  sigma_s <- theta[6]
+  
+  simulated <- simulate_full_moments(
+    mu_v = mu_v,
+    sigma_v = sigma_v,
+    p_l = p_l,
+    p_h = p_h,
+    mu_s = mu_s,
+    sigma_s = sigma_s,
+    incentive_strength = 0.5,
+    N_per_cell = 100000
+  )
+  
+  loss <- sum((simulated - empirical_moments_full)^2)
+  return(loss)
+}
+
+theta_start_full <- c(
+  mu_v = 30,
+  sigma_v = 70,
+  p_l = 0.005,
+  p_h = 0.01,
+  mu_s = 0.5,
+  sigma_s = 3
+)
+
+result_full <- optim(
+  par = theta_start_full,
+  fn = gmm_objective_full,
+  method = "L-BFGS-B",
+  control = list(maxit = 100000)
+)
+
+print(result_full$convergence)  # Should be 0
+print(result_full$par)           # Estimated parameters
+print(result_full$value)         # Objective function value
+
+# Plot
+# Simulate with estimated parameters
+estimated_theta_full <- result_full$par
+
+simulated_estimated_full <- simulate_full_moments(
+  mu_v = estimated_theta_full["mu_v"],
+  sigma_v = estimated_theta_full["sigma_v"],
+  p_l = estimated_theta_full["p_l"],
+  p_h = estimated_theta_full["p_h"],
+  mu_s = estimated_theta_full["mu_s"],
+  sigma_s = estimated_theta_full["sigma_s"],
+  incentive_strength = 0.5,
+  N_per_cell = 100000
+)
+
+moment_names_full <- paste0("Treatment_", 1:12)
+
+df_plot_full <- tibble(
+  Treatment = moment_names_full,
+  Empirical = empirical_moments_full,
+  Estimated = simulated_estimated_full
+) %>%
+  pivot_longer(cols = c(Empirical, Estimated), names_to = "Source", values_to = "Moment")
+
+# Plot
+ggplot(df_plot_full, aes(x = Treatment, y = Moment, fill = Source)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Empirical vs. Estimated Moments (Full Design)",
+       y = "Moment Value", x = "Treatment Cell") +
+  theme_minimal()
+```
+
+# This is the wrong model: simulate moments assuming s = 0
+simulate_cv_moments_wrong <- function(mu_v, sigma_v, p_l, p_h, N_per_cell = 100000) {
+  # But with 12 treatment combinations
+  treatments <- expand.grid(
+    tau = c(20, 50),
+    p_label = c("pl", "ph"),
+    I = c(-0.5, 0, 0.5)
+  )
+  
+  results <- numeric(nrow(treatments))
+  
+  for (i in seq_len(nrow(treatments))) {
+    treat <- treatments[i, ]
+    
+    p <- if (treat$p_label == "pl") p_l else p_h
+    tau <- treat$tau
+    incentive <- treat$I
+    
+    v <- rnorm(N_per_cell, mean = mu_v, sd = sigma_v)
+    
+    # the score now assume s = 0
+    score <- p * (v - tau) + incentive
+    Y <- as.integer(score > 0)
+    
+    results[i] <- mean(Y)
+  }
+  
+  return(results)
+}
+
+gmm_objective_wrong <- function(theta) {
+  mu_v <- theta[1]
+  sigma_v <- theta[2]
+  p_l <- theta[3]
+  p_h <- theta[4]
+  
+  simulated_moments <- simulate_cv_moments_wrong(mu_v, sigma_v, p_l, p_h)
+  
+  loss <- sum((simulated_moments - empirical_moments_full)^2)
+  return(loss)
+}
+
+theta_start_wrong <- c(mu_v = 30, sigma_v = 70, p_l = 0.005, p_h = 0.01)
+
+result_wrong <- optim(
+  par = theta_start_wrong,
+  fn = gmm_objective_wrong,
+  method = "L-BFGS-B",
+  control = list(maxit = 100000)
+)
+
+print(result_wrong$par)     # Estimated parameters
+print(result_wrong$value)   # Objective function value
+
+
+# Simulate the estimation
+simulated_estimated_wrong <- simulate_cv_moments_wrong(
+  mu_v = result_wrong$par["mu_v"],
+  sigma_v = result_wrong$par["sigma_v"],
+  p_l = result_wrong$par["p_l"],
+  p_h = result_wrong$par["p_h"]
+)
+
+treatment_labels <- paste0("Treatment_", 1:12)
+
+df_plot_wrong <- tibble(
+  Treatment = treatment_labels,
+  Empirical = empirical_moments_full,
+  Estimated = simulated_estimated_wrong
+) %>%
+  pivot_longer(cols = c(Empirical, Estimated), names_to = "Source", values_to = "Moment")
+
+# Plot
+ggplot(df_plot_wrong, aes(x = Treatment, y = Moment, fill = Source)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Empirical vs. Estimated Moments (Assuming $s=0$)",
+       y = "Moment Value", x = "Treatment Cell") +
+  theme_minimal()
+```
+```{r}
+# In this setup, I simulate data for 1000 individuals 
+# randomly assigned across the treatment arms (tau, p, incentive).
+# Then I estimate the full model parameters and compute 
+# standard errors based on empirical moment variability.
+
+# Let's include all the benchmark values
+benchmark_theta <- list(
+  mu_v = 40,
+  sigma_v = 50,
+  mu_s = 1,
+  sigma_s = 2,
+  p_l = 0.001,
+  p_h = 0.02
+)
+
+tau_values <- c(20, 50)
+incentive_values <- c(-0.5, 0, 0.5)
+
+# I claim we will do random assignment
+
+set.seed(35650)
+
+N <- 1000
+
+simulated_data <- tibble(
+  tau = sample(tau_values, N, replace = TRUE),
+  p_label = sample(c("pl", "ph"), N, replace = TRUE),
+  incentive = sample(incentive_values, N, replace = TRUE)
+)
+
+# In here I try to draw individual (v, s) based on distributions
+simulated_data <- simulated_data %>%
+  mutate(
+    v = rnorm(N, mean = benchmark_theta$mu_v, sd = benchmark_theta$sigma_v),
+    s = rnorm(N, mean = benchmark_theta$mu_s, sd = benchmark_theta$sigma_s),
+    p = if_else(p_label == "pl", benchmark_theta$p_l, benchmark_theta$p_h),
+    score = p * (v - tau) + s + incentive,
+    Y = as.integer(score > 0) # 1 = Yes, 0 = No
+  )
+
+# Compute the empirical moments
+empirical_moments <- simulated_data %>% # the average vote "Yes"
+  group_by(tau, p_label, incentive) %>% # remember to still draw based on these three
+  summarise(moment = mean(Y), .groups = "drop") %>%
+  mutate(cell_id = row_number()) # 1 to 12
+
+# Making the model-predicted moments
+simulate_moments <- function(theta, data) {
+  mu_v <- theta[1]
+  sigma_v <- theta[2]
+  p_l <- theta[3]
+  p_h <- theta[4]
+  mu_s <- theta[5]
+  sigma_s <- theta[6]
+  
+  # For each treatment group, simulate expected Pr(Yes)
+  predicted <- data %>%
+    group_by(tau, p_label, incentive) %>%
+    summarise(
+      pred_moment = {
+        p <- if_else(p_label == "pl", p_l, p_h)
+        mean(pnorm(p * (mu_v - tau) + mu_s + incentive, mean = 0, sd = sqrt((p^2) * sigma_v^2 + sigma_s^2)))
+      },
+      .groups = "drop"
+    ) %>%
+    pull(pred_moment)
+  
+  return(predicted)
+}
+
+# Make the GMM function
+gmm_objective <- function(theta, data, moments) {
+  simulated <- simulate_moments(theta, data)
+  sum((simulated - moments$moment)^2) # Squared distance
+}
+
+# Starting values
+theta_start <- c(30, 70, 0.005, 0.01, 0, 1) 
+
+result_full <- optim(
+  par = theta_start,
+  fn = gmm_objective,
+  data = simulated_data,
+  moments = empirical_moments,
+  method = "L-BFGS-B",
+  control = list(maxit = 10000)
+)
+
+theta_hat <- result_full$par
+
+# Finding out the var-cov for the SE
+cell_counts <- simulated_data %>%
+  group_by(tau, p_label, incentive) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  arrange(tau, p_label, incentive)
+
+# Diagonal variance-covariance matrix
+S_hat <- diag(empirical_moments$moment * (1 - empirical_moments$moment) / cell_counts$n)
+
+jacobian <- jacobian(
+  func = function(theta) simulate_moments(theta, simulated_data),
+  x = theta_hat
+)
+
+# GMM Variance-Covariance matrix --> Standard errors
+vcov_theta <- solve(t(jacobian) %*% jacobian) %*% (t(jacobian) %*% S_hat %*% jacobian) %*% solve(t(jacobian) %*% jacobian)
+se_theta <- sqrt(diag(vcov_theta))
+
+# Table
+model_table <- tibble(
+  Parameter = c("mu_v", "sigma_v", "p_l", "p_h", "mu_s", "sigma_s"),
+  Estimate = theta_hat,
+  Std_Error = se_theta
+)
+
+kable(model_table, caption = "Estimation Results with Standard Errors")
+```
+
+
+
+
+
+
+
+
+
 
